@@ -4,7 +4,7 @@ from app.core.database import engine
 # Importamos modelos para creación de tablas
 from app.models import users, solicitudes 
 # Importamos los controladores
-from app.controllers import auth_controller, estudiantes_controller, mercado_controller, admin_controller
+from app.controllers import auth_controller, estudiantes_controller, mercado_controller, admin_controller, asesores_controller
 
 # Crear tablas (Si borraste las anteriores, esto creará la nueva estructura completa)
 users.Base.metadata.create_all(bind=engine)
@@ -25,6 +25,7 @@ app.include_router(auth_controller.router)
 app.include_router(estudiantes_controller.router)
 app.include_router(mercado_controller.router)
 app.include_router(admin_controller.router)
+app.include_router(asesores_controller.router)
 
 @app.get("/")
 def root():

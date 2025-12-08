@@ -17,6 +17,7 @@ class Token(BaseModel):
     token_type: str
     rol: str
     nombre: str
+    email: str
 
 # Actualizamos la respuesta que se envía al cliente
 class UsuarioResponse(BaseModel):

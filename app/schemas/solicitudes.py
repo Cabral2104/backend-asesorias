@@ -53,3 +53,20 @@ class PostulacionResponse(PostulacionCreate):
     created_at: datetime
     class Config:
         from_attributes = True
+
+class OfertaCreate(BaseModel):
+    solicitud_id: int
+    precio: float
+    mensaje: str
+
+class OfertaResponse(BaseModel):
+    id: int
+    solicitud_id: int
+    nombre_asesor: str
+    precio: float
+    mensaje: str
+    estado: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True

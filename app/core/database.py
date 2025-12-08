@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 import urllib.parse
 
 # --- TU CONFIGURACIÓN ---
-SERVER = '192.168.100.14'  # <--- ¡TU IP DE WINDOWS!
+SERVER = '192.168.1.76'  # <--- ¡TU IP DE WINDOWS!
 DATABASE = 'AsesoriasDB'
 USERNAME = 'UserLinux'
 PASSWORD = 'Admin123'
