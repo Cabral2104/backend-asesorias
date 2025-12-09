@@ -11,86 +11,63 @@ router = APIRouter(prefix="/estudiantes", tags=["Estudiantes"])
 def crear_solicitud(dto: schemas.SolicitudCreate, email_user: str, db: Session = Depends(database.get_db)):
     usuario = db.query(users.Usuario).filter(users.Usuario.email == email_user).first()
     
-    nueva = models.Solicitud(**dto.dict(), estudiante_id=usuario.id)
-    db.add(nueva)
+    nueva_solicitud = models.Solicitud(**dto.dict(), estudiante_id=usuario.id)
+    nueva_solicitud.estado = "Abierta"
+    
+    db.add(nueva_solicitud)
     db.commit()
-    db.refresh(nueva)
-    return nueva
+    db.refresh(nueva_solicitud)
+    return nueva_solicitud
 
-# 2. Ver MIS solicitudes (con ofertas recibidas)
+# 2. Ver Mis Solicitudes (CORREGIDO: Inyección de Nombres y Contacto)
 @router.get("/mis-solicitudes", response_model=list[schemas.SolicitudResponse])
 def mis_solicitudes(email_user: str, db: Session = Depends(database.get_db)):
     usuario = db.query(users.Usuario).filter(users.Usuario.email == email_user).first()
+    solicitudes = db.query(models.Solicitud).filter(models.Solicitud.estudiante_id == usuario.id).all()
     
-    # Traemos solicitudes ordenadas por fecha reciente
-    solicitudes = db.query(models.Solicitud)\
-        .filter(models.Solicitud.estudiante_id == usuario.id)\
-        .order_by(models.Solicitud.created_at.desc())\
-        .all()
-    
+    for sol in solicitudes:
+        # A) RELLENAR NOMBRE DEL ASESOR EN LAS OFERTAS (Corrección del Error)
+        # Como la tabla Oferta ya no guarda el nombre, lo buscamos por el ID del asesor
+        for oferta in sol.ofertas:
+            if not hasattr(oferta, 'nombre_asesor') or not oferta.nombre_asesor:
+                asesor_data = db.query(users.Usuario).filter(users.Usuario.id == oferta.asesor_id).first()
+                if asesor_data:
+                    oferta.nombre_asesor = asesor_data.nombre_completo
+                else:
+                    oferta.nombre_asesor = "Usuario Eliminado"
+
+        # B) LÓGICA DE CONTACTO (Email cuando hay Match)
+        if sol.estado in ["EnProceso", "Finalizada"]:
+            # Buscamos la oferta ganadora
+            oferta_ganadora = next((o for o in sol.ofertas if o.estado in ["Aceptada", "Finalizada"]), None)
+            
+            if oferta_ganadora:
+                asesor = db.query(users.Usuario).filter(users.Usuario.id == oferta_ganadora.asesor_id).first()
+                if asesor:
+                    sol.contacto_match = asesor.email
+
     return solicitudes
 
-# 3. Aceptar una oferta
-@router.put("/solicitudes/{solicitud_id}/aceptar-oferta/{oferta_id}")
-def aceptar_oferta(solicitud_id: int, oferta_id: int, db: Session = Depends(database.get_db)):
-    # Validaciones
-    solicitud = db.query(models.Solicitud).get(solicitud_id)
-    oferta_ganadora = db.query(models.Oferta).get(oferta_id)
-    
-    if not solicitud or not oferta_ganadora:
-        raise HTTPException(status_code=404, detail="No encontrado")
-    
-    if solicitud.estado != "Abierta":
-        raise HTTPException(status_code=400, detail="La solicitud ya no está abierta")
-
-    # Lógica Transaccional
-    # 1. Marcar oferta ganadora
-    oferta_ganadora.estado = "Aceptada"
-    
-    # 2. Marcar solicitud en proceso
-    solicitud.estado = "EnProceso"
-    
-    # 3. Rechazar automáticamente las demás ofertas de esa solicitud
-    otras_ofertas = db.query(models.Oferta).filter(
-        models.Oferta.solicitud_id == solicitud_id,
-        models.Oferta.id != oferta_id
-    ).all()
-    
-    for o in otras_ofertas:
-        o.estado = "Rechazada"
-        
-    db.commit()
-    return {"mensaje": "Oferta aceptada exitosamente. El servicio ha comenzado."}
-
-# 4. Cancelar (Eliminar lógicamente) una solicitud
+# 3. Cancelar Solicitud
 @router.put("/solicitudes/{solicitud_id}/cancelar")
 def cancelar_solicitud(solicitud_id: int, email_user: str, db: Session = Depends(database.get_db)):
-    # Buscar usuario
     usuario = db.query(users.Usuario).filter(users.Usuario.email == email_user).first()
-    
-    # Buscar solicitud
     solicitud = db.query(models.Solicitud).filter(
         models.Solicitud.id == solicitud_id,
         models.Solicitud.estudiante_id == usuario.id
     ).first()
 
     if not solicitud:
-        raise HTTPException(status_code=404, detail="Solicitud no encontrada o no te pertenece")
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     
-    # Cambio de estado (Logical Delete)
     solicitud.estado = "Cancelada"
-    # Opcional: solicitud.is_active = False 
-    
     db.commit()
-    return {"mensaje": "Solicitud cancelada correctamente"}
+    return {"mensaje": "Solicitud cancelada"}
 
-# 5. Editar Solicitud
+# 4. Editar Solicitud
 @router.put("/solicitudes/{solicitud_id}")
 def editar_solicitud(solicitud_id: int, dto: schemas.SolicitudCreate, email_user: str, db: Session = Depends(database.get_db)):
-    # Buscar usuario
     usuario = db.query(users.Usuario).filter(users.Usuario.email == email_user).first()
-    
-    # Buscar solicitud que pertenezca al usuario
     solicitud = db.query(models.Solicitud).filter(
         models.Solicitud.id == solicitud_id,
         models.Solicitud.estudiante_id == usuario.id
@@ -102,7 +79,6 @@ def editar_solicitud(solicitud_id: int, dto: schemas.SolicitudCreate, email_user
     if solicitud.estado != "Abierta":
         raise HTTPException(status_code=400, detail="Solo puedes editar solicitudes Abiertas")
 
-    # Actualizar campos
     solicitud.materia = dto.materia
     solicitud.tema = dto.tema
     solicitud.descripcion = dto.descripcion
@@ -113,28 +89,26 @@ def editar_solicitud(solicitud_id: int, dto: schemas.SolicitudCreate, email_user
     db.refresh(solicitud)
     return solicitud
 
-# 6. Solicitar ser Asesor (Crear Postulación)
+# 5. Solicitar ser Asesor (Postulación)
 @router.post("/postulacion")
 def crear_postulacion(dto: schemas.PostulacionCreate, email_user: str, db: Session = Depends(database.get_db)):
     usuario = db.query(users.Usuario).filter(users.Usuario.email == email_user).first()
     
-    # Validar si ya existe una postulación previa
     existe = db.query(models.PostulacionAsesor).filter(models.PostulacionAsesor.usuario_id == usuario.id).first()
     if existe:
-        raise HTTPException(status_code=400, detail="Ya tienes una solicitud en proceso o procesada.")
+        raise HTTPException(status_code=400, detail="Ya tienes una solicitud en proceso.")
 
     nueva = models.PostulacionAsesor(**dto.dict(), usuario_id=usuario.id)
-    nueva.estado = "Pendiente" # Forzamos estado inicial
+    nueva.estado = "Pendiente"
     
     db.add(nueva)
     db.commit()
     db.refresh(nueva)
     return nueva
 
-# 7. Aceptar una Oferta (Match)
+# 6. Aceptar Oferta (Match)
 @router.put("/solicitudes/{solicitud_id}/ofertas/{oferta_id}/aceptar")
 def aceptar_oferta(solicitud_id: int, oferta_id: int, email_user: str, db: Session = Depends(database.get_db)):
-    # 1. Validar que la solicitud sea del estudiante
     usuario = db.query(users.Usuario).filter(users.Usuario.email == email_user).first()
     solicitud = db.query(models.Solicitud).filter(
         models.Solicitud.id == solicitud_id,
@@ -145,9 +119,8 @@ def aceptar_oferta(solicitud_id: int, oferta_id: int, email_user: str, db: Sessi
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     
     if solicitud.estado != "Abierta":
-        raise HTTPException(status_code=400, detail="Esta solicitud ya no está disponible para aceptar ofertas.")
+        raise HTTPException(status_code=400, detail="Esta solicitud ya no está disponible.")
 
-    # 2. Validar que la oferta exista y sea de esa solicitud
     oferta_seleccionada = db.query(models.Oferta).filter(
         models.Oferta.id == oferta_id,
         models.Oferta.solicitud_id == solicitud_id
@@ -156,15 +129,10 @@ def aceptar_oferta(solicitud_id: int, oferta_id: int, email_user: str, db: Sessi
     if not oferta_seleccionada:
         raise HTTPException(status_code=404, detail="Oferta no encontrada")
 
-    # 3. APLICAR CAMBIOS (EL MATCH)
-    
-    # A) Solicitud pasa a EnProceso
+    # Match
     solicitud.estado = "EnProceso"
-    
-    # B) Oferta seleccionada pasa a Aceptada
     oferta_seleccionada.estado = "Aceptada"
     
-    # C) Las demás ofertas se rechazan automáticamente
     otras_ofertas = db.query(models.Oferta).filter(
         models.Oferta.solicitud_id == solicitud_id,
         models.Oferta.id != oferta_id
@@ -174,13 +142,12 @@ def aceptar_oferta(solicitud_id: int, oferta_id: int, email_user: str, db: Sessi
         of.estado = "Rechazada"
 
     db.commit()
-    return {"mensaje": "Oferta aceptada. ¡La asesoría ha comenzado!"}
+    return {"mensaje": "Oferta aceptada."}
 
-# 8. Finalizar la Asesoría (Cierre del ciclo)
+# 7. Finalizar Asesoría
 @router.put("/solicitudes/{solicitud_id}/finalizar")
 def finalizar_solicitud(solicitud_id: int, email_user: str, db: Session = Depends(database.get_db)):
     usuario = db.query(users.Usuario).filter(users.Usuario.email == email_user).first()
-    
     solicitud = db.query(models.Solicitud).filter(
         models.Solicitud.id == solicitud_id,
         models.Solicitud.estudiante_id == usuario.id
@@ -190,12 +157,10 @@ def finalizar_solicitud(solicitud_id: int, email_user: str, db: Session = Depend
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     
     if solicitud.estado != "EnProceso":
-        raise HTTPException(status_code=400, detail="Solo puedes finalizar asesorías que estén en proceso.")
+        raise HTTPException(status_code=400, detail="Solo puedes finalizar asesorías en proceso.")
 
-    # 1. Finalizar la Solicitud
     solicitud.estado = "Finalizada"
     
-    # 2. Finalizar también la Oferta Aceptada (NUEVO)
     oferta_ganadora = db.query(models.Oferta).filter(
         models.Oferta.solicitud_id == solicitud.id, 
         models.Oferta.estado == "Aceptada"
@@ -205,4 +170,4 @@ def finalizar_solicitud(solicitud_id: int, email_user: str, db: Session = Depend
         oferta_ganadora.estado = "Finalizada"
     
     db.commit()
-    return {"mensaje": "¡Felicidades! Asesoría completada con éxito."}
+    return {"mensaje": "Asesoría finalizada."}
