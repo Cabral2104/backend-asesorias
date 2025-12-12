@@ -1,8 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from typing import List, Optional
 
-# --- OFERTAS (Primero, porque se usa dentro de Solicitud) ---
+# --- OFERTAS ---
 class OfertaCreate(BaseModel):
     solicitud_id: int
     precio: float
@@ -11,19 +11,18 @@ class OfertaCreate(BaseModel):
 class OfertaResponse(BaseModel):
     id: int
     solicitud_id: int
-    nombre_asesor: str
+    # Lo hacemos opcional para evitar el crash si no se ha hecho el join con el usuario
+    nombre_asesor: Optional[str] = None 
     precio: float
     mensaje: str
     estado: str
     created_at: datetime
     
-    # NUEVO: Email del estudiante (solo visible si hay match)
-    contacto_match: str | None = None 
+    contacto_match: Optional[str] = None 
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
-# --- SOLICITUDES (Lado Estudiante) ---
+# --- SOLICITUDES ---
 class SolicitudCreate(BaseModel):
     materia: str
     tema: str
@@ -34,17 +33,17 @@ class SolicitudCreate(BaseModel):
 class SolicitudResponse(SolicitudCreate):
     id: int
     estado: str
-    estudiante_id: int
-    created_at: datetime
     
-    # NUEVO: Email del asesor (solo visible si hay match)
-    contacto_match: str | None = None
+    # CORRECCIÓN: Usamos estudiante_id que es como se llama en tu BD usualmente
+    estudiante_id: int 
     
-    # Incluimos las ofertas recibidas
+    created_at: Optional[datetime] = None
+    
+    contacto_match: Optional[str] = None
+    
     ofertas: List[OfertaResponse] = []
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- POSTULACIÓN ASESOR ---
 class PostulacionCreate(BaseModel):
@@ -59,5 +58,13 @@ class PostulacionResponse(PostulacionCreate):
     estado: str
     usuario_id: int
     created_at: datetime
-    class Config:
-        from_attributes = True
+    
+    model_config = ConfigDict(from_attributes=True)
+
+# --- PAGINACIÓN ---
+class PaginatedSolicitudesResponse(BaseModel):
+    data: List[SolicitudResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
